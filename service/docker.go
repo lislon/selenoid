@@ -176,16 +176,13 @@ func (d *Docker) StartWithCancel() (*StartedService, error) {
 		}
 	}
 
-	stat, err := cl.ContainerInspect(ctx, browserContainerId)
+	stat, err := getContainerStats(cl, ctx, browserContainerId, selenium, 1*time.Second)
+
 	if err != nil {
 		removeContainer(ctx, cl, requestId, browserContainerId)
-		return nil, fmt.Errorf("inspect container %s: %s", browserContainerId, err)
+		return nil, err
 	}
-	_, ok := stat.NetworkSettings.Ports[selenium]
-	if !ok {
-		removeContainer(ctx, cl, requestId, browserContainerId)
-		return nil, fmt.Errorf("no bindings available for %v", selenium)
-	}
+
 	servicePort := d.Service.Port
 	pc := map[string]nat.Port{
 		servicePort:      selenium,
@@ -260,6 +257,25 @@ func (d *Docker) StartWithCancel() (*StartedService, error) {
 		},
 	}
 	return &s, nil
+}
+
+func getContainerStats(cl *client.Client, ctx context.Context, browserContainerId string, seleniumPort nat.Port, timeout time.Duration) (types.ContainerJSON, error) {
+	for start := time.Now(); time.Since(start) < timeout; {
+		stat, err := cl.ContainerInspect(ctx, browserContainerId)
+		if err != nil {
+			return types.ContainerJSON{}, fmt.Errorf("inspect container %s: %s", browserContainerId, err)
+		}
+		portBindings, ok := stat.NetworkSettings.Ports[seleniumPort]
+		if !ok {
+			return types.ContainerJSON{}, fmt.Errorf("no portBindings available for %v", seleniumPort)
+		}
+		if len(portBindings) > 0 {
+			return stat, nil
+		}
+		time.Sleep(timeout / 10)
+	}
+
+	return types.ContainerJSON{}, fmt.Errorf("no portMappings available for %v", seleniumPort)
 }
 
 func getPortConfig(service *config.Browser, caps session.Caps, env Environment) (*portConfig, error) {
